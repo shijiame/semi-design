@@ -47,6 +47,7 @@ interface MonthsGridElementProps {
 }
 
 export type PanelType = 'left' | 'right';
+export type YearMonthChangeType = 'prevMonth' | 'nextMonth' | 'prevYear' | 'nextYear';
 
 export interface MonthsGridFoundationProps extends MonthsGridElementProps {
     type?: Type;
@@ -268,9 +269,65 @@ export default class MonthsGridFoundation extends BaseFoundation<MonthsGridAdapt
     // eslint-disable-next-line @typescript-eslint/no-empty-function
     destroy() { }
 
+    /**
+     * sync change another panel month when change months from the else yam panel
+     * call it when
+     *  - current change panel targe date month is same with another panel date
+     * 
+     * @example
+     *  - panelType=right, target=new Date('2022-09-01') and left panel is in '2022-09' => call it, left panel minus one month to '2022-08'
+     *  - panelType=left, target=new Date('2021-12-01') and right panel is in '2021-12' => call it, right panel add one month to '2021-01'
+     */
+    handleSyncChangeMonths(options: { panelType: PanelType, target: Date }) {
+        const { panelType, target } = options;
+        const { type } = this._adapter.getProps();
+        const { monthLeft, monthRight } = this._adapter.getStates();
+        if (this.isRangeType(type)) {
+            if (panelType === 'right' && differenceInCalendarMonths(target, monthLeft.pickerDate) === 0) {
+                this.handleYearOrMonthChange('prevMonth', 'left', 1, true);
+            } else if (panelType === 'left' && differenceInCalendarMonths(monthRight.pickerDate, target) === 0) {
+                this.handleYearOrMonthChange('nextMonth', 'right', 1, true);
+            }
+        }
+    }
+
+    /**
+     * Get the target date based on the panel type and switch type
+     */
+    getTargetChangeDate(options: { panelType: PanelType, switchType: YearMonthChangeType }) {
+        const { panelType, switchType } = options;
+        const { monthRight, monthLeft } = this._adapter.getStates();
+        const currentDate = panelType === 'left' ? monthLeft.pickerDate : monthRight.pickerDate;
+        let target: Date;
+        
+        switch (switchType) {
+            case 'prevMonth':
+                target = addMonths(currentDate, -1);
+                break;
+            case 'nextMonth':
+                target = addMonths(currentDate, 1);
+                break;
+            case 'prevYear':
+                target = addYears(currentDate, -1);
+                break;
+            case 'nextYear':
+                target = addYears(currentDate, 1);
+                break;
+        }
+        return target;
+    }
+
+    /**
+     * Change month by yam panel
+     */
     toMonth(panelType: PanelType, target: Date) {
+        const { type } = this._adapter.getProps();
         const diff = this._getDiff('month', target, panelType);
         this.handleYearOrMonthChange(diff < 0 ? 'prevMonth' : 'nextMonth', panelType, Math.abs(diff), false);
+    
+        if (this.isRangeType(type)) {
+            this.handleSyncChangeMonths({ panelType, target });
+        }
     }
 
     toYear(panelType: PanelType, target: Date) {
@@ -291,11 +348,19 @@ export default class MonthsGridFoundation extends BaseFoundation<MonthsGridAdapt
 
     handleSwitchMonth(switchType: 'prevMonth' | 'nextMonth', panelType: PanelType) {
         const { type, syncSwitchMonth } = this.getProps();
-        if (this.isRangeType(type) && syncSwitchMonth) {
+        const rangeType = this.isRangeType(type);
+
+        if (rangeType && syncSwitchMonth) {
             this.handleYearOrMonthChange(switchType, 'left', 1, true);
             this.handleYearOrMonthChange(switchType, 'right', 1, true);
         } else {
             this.handleYearOrMonthChange(switchType, panelType);
+
+            // default behavior (v2.2.0)
+            if (rangeType) {
+                const target = this.getTargetChangeDate({ panelType, switchType });
+                this.handleSyncChangeMonths({ panelType, target });
+            }
         }
     }
 
@@ -309,10 +374,20 @@ export default class MonthsGridFoundation extends BaseFoundation<MonthsGridAdapt
 
     prevYear(panelType: PanelType) {
         this.handleYearOrMonthChange('prevYear', panelType);
+
+        if (this.isRangeType()) {
+            const target = this.getTargetChangeDate({ panelType, switchType: 'prevYear' });
+            this.handleSyncChangeMonths({ panelType, target });
+        }
     }
 
     nextYear(panelType: PanelType) {
         this.handleYearOrMonthChange('nextYear', panelType);
+
+        if (this.isRangeType()) {
+            const target = this.getTargetChangeDate({ panelType, switchType: 'nextYear' });
+            this.handleSyncChangeMonths({ panelType, target });
+        }
     }
 
     /**
@@ -414,7 +489,7 @@ export default class MonthsGridFoundation extends BaseFoundation<MonthsGridAdapt
     }
 
     handleYearOrMonthChange(
-        type: 'prevMonth' | 'nextMonth' | 'prevYear' | 'nextYear',
+        type: YearMonthChangeType,
         panelType: PanelType = strings.PANEL_TYPE_LEFT,
         step = 1,
         notSeparateInRange = false
@@ -458,7 +533,7 @@ export default class MonthsGridFoundation extends BaseFoundation<MonthsGridAdapt
      * @param {*} targetDate
      */
     updateDateAfterChangeYM(
-        type: 'prevMonth' | 'nextMonth' | 'prevYear' | 'nextYear',
+        type: YearMonthChangeType,
         targetDate: Date
     ) {
         const { multiple, disabledDate } = this.getProps();
@@ -838,5 +913,28 @@ export default class MonthsGridFoundation extends BaseFoundation<MonthsGridAdapt
 
     showDatePanel(panelType: PanelType) {
         this._updatePanelDetail(panelType, { isTimePickerOpen: false, isYearPickerOpen: false });
+    }
+
+    /**
+     * Get yam open type
+     * 
+     * It is useful info to set minHeight of weeks.
+     *  - When yam open type is 'left' or 'right', weeks minHeight should be set
+     *    If the minHeight is not set, the change of the number of weeks will cause the scrollList to be unstable
+     */
+    getYAMOpenType() {
+        const { monthLeft, monthRight } = this._adapter.getStates();
+        const leftYearPickerOpen = monthLeft.isYearPickerOpen;
+        const rightYearPickerOpen = monthRight.isYearPickerOpen;
+
+        if (leftYearPickerOpen && rightYearPickerOpen) {
+            return 'both';
+        } else if (leftYearPickerOpen) {
+            return 'left';
+        } else if (rightYearPickerOpen) {
+            return 'right';
+        } else {
+            return 'none';
+        }
     }
 }
